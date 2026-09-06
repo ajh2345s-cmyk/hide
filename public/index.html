@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ko">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>명화 카멜레온 - 초안</title><link rel="stylesheet" href="style.css"></head>
+<body>
+<div id="lobby" class="screen">
+  <div class="panel">
+    <div class="eyebrow">2D HIDE & SEEK</div>
+    <h1>명화 카멜레온</h1>
+    <p>명화 속 색으로 변장하고 숨어보세요.</p>
+    <input id="name" maxlength="16" placeholder="이름" value="학생">
+    <input id="room" maxlength="12" placeholder="방 코드" value="CLASS1">
+    <button id="joinBtn">방 입장</button>
+    <div id="joinError"></div>
+  </div>
+</div>
+<div id="waiting" class="screen hidden"><div class="panel wide"><div class="eyebrow">WAITING ROOM</div><h2>방 코드 <span id="roomCodeText"></span></h2><div id="roster"></div><button id="startBtn">게임 시작</button><small>초안에서는 2명 이상이면 시작됩니다. 최대 20명.</small></div></div>
+<div id="game" class="hidden">
+  <header><div><b>명화 카멜레온</b><span id="phaseText">준비</span></div><div>라운드 <span id="round">0</span> · <strong id="time">--</strong></div></header>
+  <main>
+    <canvas id="canvas" width="1200" height="700"></canvas>
+    <aside>
+      <h3 id="roleTitle">역할</h3><p id="roleDesc">게임이 시작되면 역할이 표시됩니다.</p>
+      <div id="paintTools" class="hidden"><h3>내 캐릭터 색칠</h3><label>부위<select id="part"><option value="body">몸</option><option value="head">머리</option><option value="arm">팔</option><option value="leg">다리</option></select></label><input id="color" type="color" value="#6f665d"><button id="paintBtn">칠하기</button><p class="hint">맵의 색을 참고해서 몸을 비슷하게 만들어 숨으세요.</p></div>
+      <div id="seekTools" class="hidden"><h3>술래</h3><p>가까이 다가가 사람을 누르면 잡기를 시도합니다.</p></div>
+      <div id="toast"></div>
+    </aside>
+  </main>
+  <footer><span>명화: 자체 제작 컬러 팔레트 시안</span><span>학교 태블릿용 2D 초안</span></footer>
+</div>
+<script src="/socket.io/socket.io.js"></script><script src="game.js"></script>
+</body></html>
