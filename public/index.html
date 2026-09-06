@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-<title>명화 카멜레온 V3</title>
+<title>명화 카멜레온 V4</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <section id="lobby" class="screen">
   <div class="panel">
-    <div class="eyebrow">2D HIDE & SEEK · V3</div>
+    <div class="eyebrow">2D HIDE & SEEK · V4</div>
     <h1>명화 카멜레온</h1>
-    <p>몸 전체를 칠해 그림 속에 숨고, 탐지 펄스로 찾아내세요.</p>
+    <p>주변 색으로 사람을 칠해 그림 속에 숨고, 술래는 넓은 맵을 돌아다니며 찾아냅니다.</p>
     <input id="name" maxlength="16" placeholder="이름" value="학생">
     <input id="room" maxlength="12" placeholder="학생용 방 코드">
     <button id="joinBtn">학생으로 입장</button>
@@ -32,19 +32,23 @@
       </div>
       <div class="hostActions"><button id="hostStartBtn" disabled>게임 시작</button><button id="hostRestartBtn" class="ghost">대기실 초기화</button></div>
     </div>
+
     <div class="settingsGrid">
+      <label>맵<select id="mapSelect"><option value="monalisa">모나리자 갤러리</option><option value="classic">오리지널 명화풍 맵</option></select></label>
       <label>숨을 시간(초)<input id="hideSeconds" type="number" min="10" max="600" value="90"></label>
       <label>찾는 시간(초)<input id="seekSeconds" type="number" min="30" max="900" value="180"></label>
       <label>기본 탐지 간격(초)<input id="baseScanSeconds" type="number" min="0.5" max="30" step="0.5" value="5"></label>
-      <label>마지막 구간 탐지 간격(초)<input id="finalScanSeconds" type="number" min="0.5" max="10" step="0.5" value="1"></label>
+      <label>마지막 탐지 간격(초)<input id="finalScanSeconds" type="number" min="0.5" max="10" step="0.5" value="1"></label>
       <label>마지막 구간(초)<input id="finalScanWindowSeconds" type="number" min="5" max="120" value="30"></label>
-      <label>탐지 범위<input id="scanRadius" type="number" min="50" max="400" value="135"></label>
+      <label>탐지 범위<input id="scanRadius" type="number" min="60" max="450" value="150"></label>
       <label>드러남 시간(초)<input id="revealSeconds" type="number" min="0.5" max="5" step="0.1" value="1.8"></label>
       <button id="saveSettings" class="ghost">설정 저장</button>
     </div>
+
     <div class="hostLayout">
-      <div>
-        <h3>전체 맵 — 관리자는 시작 후 항상 전체를 봄</h3>
+      <div class="hostMapWrap">
+        <h3>관리자 전체 맵 보기</h3>
+        <div class="hostLegend"><span>🟠 술래</span><span>🟢 숨는 사람</span><span>이름 표시</span></div>
         <canvas id="hostCanvas" width="1100" height="700"></canvas>
       </div>
       <div class="rosterPanel"><h3>참가자 / 역할</h3><div id="hostRoster"></div><div id="hostStatus"></div></div>
@@ -57,12 +61,14 @@
     <span id="phaseLabel">대기</span><span id="timer">00:00</span><span id="roleLabel"></span><span id="status"></span>
   </div>
   <canvas id="gameCanvas"></canvas>
+
   <div id="paintTools" class="toolbar hidden">
     <button id="paintToggle">🖌 그리기</button><button id="eyedropperToggle">💧 스포이드</button>
-    <input id="color" type="color" value="#7b8f70"><label>크기 <input id="brushSize" type="range" min="6" max="40" value="18"></label>
+    <input id="color" type="color" value="#6f7b63"><label>크기 <input id="brushSize" type="range" min="5" max="42" value="18"></label>
     <div class="poseButtons"><span>자세</span><button data-pose="stand">서기</button><button data-pose="crouch">웅크리기</button><button data-pose="lay">눕기</button></div>
   </div>
-  <div id="seekTools" class="toolbar hidden"><span>찾기: 화면을 눌러 탐지 펄스를 보내세요</span><span id="scanText"></span></div>
+
+  <div id="seekTools" class="toolbar hidden"><span>탐지: 화면을 눌러 탐지</span><span id="scanText"></span></div>
   <div id="joystick" aria-label="이동 패드"><div class="stick"></div></div>
   <div id="resultBox" class="result hidden"></div>
 </section>
