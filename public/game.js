@@ -1,238 +1,185 @@
-const socket = io({transports:['websocket','polling']});
-const $ = id => document.getElementById(id);
-const canvas = $('canvas');
-const ctx = canvas.getContext('2d', { alpha:false });
-ctx.imageSmoothingEnabled = false;
+const socket = io();
+const $ = (id) => document.getElementById(id);
+const lobby = $('lobby'), host = $('host'), game = $('game');
+const gameCanvas = $('gameCanvas'), ctx = gameCanvas.getContext('2d');
+const hostCanvas = $('hostCanvas'), hctx = hostCanvas.getContext('2d');
+let state = null, me = null, isHost = false, camera = {x:0,y:0}, moveVec = {x:0,y:0};
+let paintMode = false, eyedropperMode = false, painting = false, lastMove = 0;
+let scanFX = [];
+const renderPlayers = new Map();
 
-let state = null;
-let me = null;
-let paintMode = false;
-let eyedropperMode = false;
-let catchMode = false;
-let painting = false;
-let camera = {x:0,y:0};
-let lastMove = 0;
-let moveVec = {x:0,y:0};
-let joystickActive = false;
-let renderPlayers = new Map();
-const WORLD = { width:5000, height:3200 };
-
-$('joinBtn').onclick = () => socket.emit('join',{roomCode:$('room').value,name:$('name').value});
-$('hostBtn').onclick = () => socket.emit('host',{code:$('adminCode').value});
-$('startBtn')?.remove();
+$('hostBtn').onclick = () => socket.emit('host', { code: $('adminCode').value });
+$('joinBtn').onclick = () => socket.emit('join', { roomCode: $('room').value, name: $('name').value });
+$('copyCodeBtn').onclick = async () => { await navigator.clipboard?.writeText($('hostRoomCode').textContent.trim()); $('hostStatus').textContent='방 코드를 복사했어요.'; };
 $('hostStartBtn').onclick = () => socket.emit('start');
 $('hostRestartBtn').onclick = () => socket.emit('restart');
-$('copyCodeBtn').onclick = async () => { try { await navigator.clipboard.writeText($('hostRoomCode').textContent); toastHost('복사했어요.'); } catch {} };
-$('joinError').textContent = '';
+$('saveSettings').onclick = () => socket.emit('settings', {
+  hideSeconds: $('hideSeconds').value, seekSeconds: $('seekSeconds').value,
+  baseScanSeconds: $('baseScanSeconds').value, finalScanSeconds: $('finalScanSeconds').value,
+  finalScanWindowSeconds: $('finalScanWindowSeconds').value, scanRadius: $('scanRadius').value, revealSeconds: $('revealSeconds').value
+});
 
-socket.on('joinError', m => $('joinError').textContent = m);
-socket.on('hostError', m => $('joinError').textContent = m);
-socket.on('hostReady', ({roomCode}) => {
-  $('lobby').classList.add('hidden'); $('host').classList.remove('hidden');
-  $('hostRoomCode').textContent = roomCode;
-});
-socket.on('joined', ({roomCode}) => {
-  $('lobby').classList.add('hidden'); $('waiting').classList.remove('hidden'); $('roomCodeText').textContent = roomCode;
-});
+socket.on('hostReady', ({roomCode}) => { isHost = true; lobby.classList.add('hidden'); host.classList.remove('hidden'); $('hostRoomCode').textContent = roomCode; });
+socket.on('joined', ({roomCode}) => { isHost = false; lobby.classList.add('hidden'); game.classList.remove('hidden'); $('room').value = roomCode; resize(); });
+socket.on('hostError', msg => $('joinError').textContent = msg);
+socket.on('joinError', msg => $('joinError').textContent = msg);
 socket.on('roomClosed', () => location.reload());
+socket.on('scanEffect', fx => { scanFX.push({...fx, started: performance.now()}); setStatus(fx.found?.length ? `${fx.found.length}명 감지!` : '탐지 펄스'); });
+socket.on('caught', ({name}) => setStatus(`${name} 학생을 찾았어요`));
+socket.on('scanDenied', ({waitMs}) => setStatus(`다음 탐지까지 ${(waitMs/1000).toFixed(1)}초`));
+socket.on('catchDenied', msg => setStatus(msg));
 
-socket.on('state', s => {
+socket.on('state', (s) => {
   state = s;
-  renderPlayers = new Map(s.players.map(p=>[p.id,{...p}]));
-  me = s.players.find(p=>p.id===socket.id) || null;
-  if ($('host').classList.contains('hidden') === false) {
-    $('hostRoomCode').textContent = s.roomCode;
-    $('hostRoster').innerHTML = s.players.map(p=>`<div class="playerChip">${escapeHtml(p.name)}</div>`).join('');
-    $('hostStartBtn').disabled = s.players.length < 2 || s.phase !== 'waiting';
-  }
-  $('roster').innerHTML = s.players.map(p=>`<div class="playerChip">${escapeHtml(p.name)}</div>`).join('');
-  if (s.phase !== 'waiting' && !$('host').classList.contains('hidden') === false) {}
-  if (s.phase !== 'waiting' && $('game').classList.contains('hidden')) {
-    $('waiting').classList.add('hidden'); $('game').classList.remove('hidden');
-  }
-  updateUI();
+  if (isHost) { renderHost(); return; }
+  const p = s.players.find(p => p.id === socket.id);
+  if (p) { me = p; renderPlayers.set(p.id, p); }
+  for (const p of s.players) renderPlayers.set(p.id, p);
+  for (const id of [...renderPlayers.keys()]) if (!s.players.some(p=>p.id===id)) renderPlayers.delete(id);
+  renderUI();
+  resize();
 });
 
-socket.on('caught', ({name}) => setStatus(`${name}을(를) 찾았습니다!`));
-socket.on('miss', () => setStatus('조금 더 가까이 가세요.'));
-
-function updateUI(){
+function renderUI(){
   if (!state) return;
-  $('round').textContent = state.round;
-  $('time').textContent = state.timeLeft + '초';
-  $('phaseText').textContent = state.phase==='hide'?'숨기':state.phase==='seek'?'찾기':state.phase==='result'?'결과':'대기';
-  const roleText = me?.role === 'seeker' ? '🔎 술래' : me?.role === 'hider' ? (me.alive?'🫥 숨는 사람':'✅ 발견됨') : '';
-  $('roleBadge').textContent = roleText;
-  if (me?.role === 'hider') { $('paintPanel').classList.remove('hidden'); $('seekPanel').classList.add('hidden'); }
-  else if (me?.role === 'seeker') { $('seekPanel').classList.remove('hidden'); $('paintPanel').classList.add('hidden'); }
-  if (state.phase==='hide' && me?.role==='hider') { $('roleTitle').textContent='숨는 사람'; $('roleDesc').textContent='먼저 좋은 장소를 찾고, 그다음 몸에 주변 색을 칠하세요.'; $('joystick').style.display='block'; $('paintToggle').classList.remove('hidden'); $('eyedropperToggle').classList.remove('hidden'); $('catchMode').classList.add('hidden'); }
-  else if (state.phase==='seek' && me?.role==='seeker') { $('roleTitle').textContent='술래'; $('roleDesc').textContent='카메라는 내가 움직이는 방향으로 함께 이동합니다. 큰 맵을 돌아다니며 찾아보세요.'; $('joystick').style.display='block'; $('paintToggle').classList.add('hidden'); $('eyedropperToggle').classList.add('hidden'); $('catchMode').classList.remove('hidden'); }
-  else { $('paintToggle').classList.add('hidden'); $('eyedropperToggle').classList.add('hidden'); }
-  if (me) camera = clampCamera(me.x,me.y);
-  draw();
+  const phaseName = {waiting:'대기',hide:'숨기',seek:'찾기',result:'결과'}[state.phase] || '';
+  $('phaseLabel').textContent = phaseName;
+  $('timer').textContent = fmt(state.timeLeft);
+  $('roleLabel').textContent = me ? (me.role==='hider'?'숨는 사람':me.role==='seeker'?'찾는 사람':'') : '';
+  $('paintTools').classList.toggle('hidden', !(me?.role==='hider' && state.phase==='hide'));
+  $('seekTools').classList.toggle('hidden', !(me?.role==='seeker' && state.phase==='seek'));
+  $('scanText').textContent = me?.role==='seeker' ? `탐지 간격 ${state.scanCooldown}초` : '';
+  $('joystick').classList.toggle('hidden', !(me?.role==='hider' && state.phase==='hide'));
+  if (state.phase==='result') showResult(); else $('resultBox').classList.add('hidden');
 }
-
-function clampCamera(x,y){
-  const vw = canvas.width, vh = canvas.height;
-  return {x:Math.max(vw/2,Math.min(WORLD.width-vw/2,x)), y:Math.max(vh/2,Math.min(WORLD.height-vh/2,y))};
+function showResult(){
+  const alive = state.players.filter(p=>p.role==='hider'&&p.alive).map(p=>p.name);
+  $('resultBox').innerHTML = `<h2>라운드 종료</h2><p>끝까지 살아남은 숨는 사람</p><div class="big">${alive.length?escapeHtml(alive.join(', ')):'없음'}</div>`;
+  $('resultBox').classList.remove('hidden');
 }
+function fmt(n){const m=Math.floor(n/60),s=Math.max(0,n%60);return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`}
+function setStatus(m){$('status').textContent=m;clearTimeout(setStatus.t);setStatus.t=setTimeout(()=>{$('status').textContent=''},1400)}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 
-function screenToWorld(sx,sy){ return {x:sx+camera.x-canvas.width/2,y:sy+camera.y-canvas.height/2}; }
-function worldToScreen(x,y){ return {x:x-camera.x+canvas.width/2,y:y-camera.y+canvas.height/2}; }
+function resize(){
+  if (game.classList.contains('hidden')) return;
+  const dpr=Math.min(1.5,window.devicePixelRatio||1); const w=innerWidth,h=innerHeight;
+  gameCanvas.width=Math.floor(w*dpr); gameCanvas.height=Math.floor(h*dpr); gameCanvas.style.width=w+'px';gameCanvas.style.height=h+'px';ctx.setTransform(dpr,0,0,dpr,0,0); render();
+}
+window.addEventListener('resize',resize);
 
-function draw(){
-  ctx.fillStyle='#d8c9ad'; ctx.fillRect(0,0,canvas.width,canvas.height);
-  ctx.save(); ctx.translate(canvas.width/2-camera.x, canvas.height/2-camera.y);
-  drawWorld();
+function mapColors(){ return {bg:'#d2c7ab', path:'#e8dec2', a:'#738765',b:'#8a6d62',c:'#b89966',d:'#6e8284',e:'#8e816c',f:'#7c7188',ink:'#4f4b42'}; }
+function drawWorld(g, w,h, scale){
+  const c=mapColors(); g.clearRect(0,0,w,h); g.fillStyle=c.bg;g.fillRect(0,0,w,h);
+  const zones=[[180,180,1800,1200,c.a],[2200,140,2100,1250,c.b],[4650,180,2700,1100,c.c],[170,1650,1950,2050,c.d],[2400,1570,2050,2200,c.e],[4800,1500,2500,2350,c.f],[300,3850,7000,600,'#877e72']];
+  for(const z of zones){g.fillStyle=z[4];roundRect(g,z[0],z[1],z[2],z[3],55);}
+  g.lineWidth=180;g.lineCap='round';g.strokeStyle=c.path;const roads=[[[100,1320],[1200,1240],[2400,1350],[3800,1320],[5200,1250],[7480,1370]],[[1700,120],[1900,900],[2150,1650],[2050,3000],[1800,4700]],[[4200,100],[4050,800],[4250,1550],[4100,2900],[4200,4700]],[[300,3150],[1600,3020],[2800,3140],[4300,3000],[6000,3120],[7480,3050]]];
+  for(const pts of roads){g.beginPath();g.moveTo(...pts[0]);for(let i=1;i<pts.length;i++)g.lineTo(...pts[i]);g.stroke();}
+  const objects=[[500,520,130,c.ink],[1200,850,110,'#53644d'],[2700,480,135,'#594d48'],[3500,700,120,'#7b5e4a'],[5550,580,150,'#7d694f'],[6850,680,125,'#6a5e58'],[680,2240,150,'#50686b'],[1500,2420,125,'#4e6252'],[2950,2150,160,'#665d54'],[5450,2220,150,'#5f626f'],[6600,2450,120,'#6e5c73'],[1150,3500,135,'#65594f'],[2600,3900,150,'#5a6651'],[3900,3720,130,'#675c54'],[6100,3780,160,'#5a6668']];
+  for(const [x,y,r,col] of objects){g.fillStyle=col;g.beginPath();g.arc(x,y,r,0,Math.PI*2);g.fill();}
+  g.strokeStyle='#5d5349';g.lineWidth=22;g.strokeRect(18,18,7600-36,4800-36);
+  g.font='bold 44px system-ui';g.fillStyle='#4a4238';g.fillText('명화풍 테스트 맵 · V3',110,4680);
+}
+function roundRect(g,x,y,w,h,r){g.beginPath();g.moveTo(x+r,y);g.arcTo(x+w,y,x+w,y+h,r);g.arcTo(x+w,y+h,x,y+h,r);g.arcTo(x,y+h,x,y,r);g.arcTo(x,y,x+w,y,r);g.closePath();g.fill()}
+
+function cameraForMe(){
+  if(!me)return {x:3800,y:2400};
+  return {x:me.x,y:me.y};
+}
+function worldToScreen(x,y){ return {x:x-camera.x+innerWidth/2,y:y-camera.y+innerHeight/2}; }
+function screenToWorld(sx,sy){ return {x:sx-innerWidth/2+camera.x,y:sy-innerHeight/2+camera.y}; }
+function render(){
+  if (!state) return;
+  if (isHost) return renderHostCanvas();
+  camera = cameraForMe();
+  camera.x=Math.max(innerWidth/2,Math.min(state.map.width-innerWidth/2,camera.x));
+  camera.y=Math.max(innerHeight/2,Math.min(state.map.height-innerHeight/2,camera.y));
+  ctx.save();
+  ctx.translate(innerWidth/2-camera.x,innerHeight/2-camera.y); drawWorld(ctx,state.map.width,state.map.height,1);
   ctx.restore();
-  if(!state) return;
-  const ordered=[...renderPlayers.values()].sort((a,b)=>a.y-b.y);
-  for(const p of ordered){
-    const localHidden = state.phase==='seek' && p.role==='hider' && p.alive && p.id!==socket.id;
-    if (localHidden) continue; // seeker cannot see hiders globally; proximity reveal is handled by target check/highlight below
-    drawPerson(p);
+  if (state.phase==='hide' || state.phase==='seek') drawPlayers();
+  drawEffects();
+}
+function playerVisible(p){
+  if (p.role==='hider' && state.phase==='seek' && p.id!==socket.id){
+    if (p.revealUntil && Date.now() < p.revealUntil) return true;
+    // Hidden until a scan pulse reveals them. Admin sees everyone separately.
+    return false;
   }
-  if (me?.role==='seeker' && state.phase==='seek') drawNearbyHints();
+  return true;
 }
-
-function drawWorld(){
-  // Simple hand-painted, original map: five large zones with paths and landmarks.
-  ctx.fillStyle='#cbbd9e'; ctx.fillRect(0,0,WORLD.width,WORLD.height);
-  const zones=[
-    {x:150,y:150,w:1400,h:900,c:'#8d9f79'}, {x:1750,y:140,w:1450,h:950,c:'#9c7d69'},
-    {x:3400,y:180,w:1350,h:1000,c:'#c39e73'}, {x:220,y:1300,w:1550,h:1450,c:'#7d8f95'},
-    {x:2050,y:1350,w:1350,h:1400,c:'#91856f'}, {x:3650,y:1370,w:1150,h:1420,c:'#867d98'}
-  ];
-  for(const z of zones){ ctx.fillStyle=z.c; roundRectFill(z.x,z.y,z.w,z.h,42); }
-  // Roads
-  ctx.strokeStyle='#d9c9aa'; ctx.lineWidth=130; ctx.lineCap='round';
-  const roads=[[[80,1180],[1100,1100],[1950,1280],[3150,1120],[4920,1240]],[[900,150],[1350,750],[1860,1500],[1750,3000]],[[3080,100],[3000,800],[3300,1500],[3050,3000]],[[500,2350],[1500,2250],[2550,2150],[3500,2280],[4800,2420]]];
-  for(const pts of roads){ctx.beginPath();ctx.moveTo(...pts[0]);for(let i=1;i<pts.length;i++)ctx.lineTo(...pts[i]);ctx.stroke();}
-  // Large decorative objects.
-  for(const [x,y,r,c] of [[430,430,90,'#506447'],[1120,690,120,'#5d6d4f'],[2330,460,110,'#6c5d50'],[2850,850,95,'#5d725e'],[4050,590,130,'#7d644e'],[740,1890,140,'#5c6e73'],[1460,2500,120,'#536a58'],[2600,1760,140,'#665c4d'],[3300,2300,130,'#5d6570'],[4420,2140,115,'#6d5e70']]){ ctx.fillStyle=c; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill(); }
-  // Repeating tiny painted tiles.
-  for(let y=350;y<2950;y+=170){ for(let x=300+(y%340);x<4850;x+=260){ if(((x/260)+(y/170))%3===0){ctx.fillStyle='#a28c70';ctx.fillRect(x,y,80,52);ctx.fillStyle='#7c6d5d';ctx.fillRect(x+10,y-12,60,12);} } }
-  // Border frame
-  ctx.strokeStyle='#604f44'; ctx.lineWidth=20; ctx.strokeRect(0,0,WORLD.width,WORLD.height);
-}
-
-function roundRectFill(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();ctx.fill();}
-
-function bodyPath(){
-  ctx.beginPath();
-  ctx.moveTo(-38,65); ctx.quadraticCurveTo(-45,35,-34,5); ctx.quadraticCurveTo(-56,-8,-58,-42); ctx.quadraticCurveTo(-62,-72,-42,-94); ctx.quadraticCurveTo(-22,-112,0,-113); ctx.quadraticCurveTo(22,-112,42,-94); ctx.quadraticCurveTo(62,-72,58,-42); ctx.quadraticCurveTo(56,-8,34,5); ctx.quadraticCurveTo(45,35,38,65); ctx.quadraticCurveTo(22,87,0,88); ctx.quadraticCurveTo(-22,87,-38,65); ctx.closePath();
-}
-
-function drawPerson(p){
-  const s=worldToScreen(p.x,p.y); ctx.save();ctx.translate(s.x,s.y);ctx.rotate(p.rotation||0);
-  ctx.fillStyle='#0003';ctx.beginPath();ctx.ellipse(0,72,45,14,0,0,Math.PI*2);ctx.fill();
-  // white base + single paintable body
-  ctx.save(); bodyPath(); ctx.clip(); ctx.fillStyle='#f7f4ed'; ctx.fill();
-  for(const st of (p.paint||[])){ctx.fillStyle=st.color;ctx.beginPath();ctx.arc(st.x,st.y,st.radius,0,Math.PI*2);ctx.fill();}
-  ctx.restore();
-  ctx.strokeStyle='#554c43';ctx.lineWidth=4;bodyPath();ctx.stroke();
-  ctx.fillStyle='#2229';ctx.beginPath();ctx.arc(0,-63,5,0,Math.PI*2);ctx.fill();
-  if(p.id===socket.id && p.role==='hider') {ctx.strokeStyle='#2e4d42';ctx.lineWidth=5;ctx.beginPath();ctx.arc(0,-10,75,0,Math.PI*2);ctx.stroke();}
-  if(p.role==='seeker') {ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(0,-112,18,0,Math.PI*2);ctx.fill();ctx.fillStyle='#c75b3e';ctx.font='bold 15px system-ui';ctx.textAlign='center';ctx.fillText('술래',0,-107);}
-  ctx.restore();
-}
-
-function drawNearbyHints(){
-  if(!me) return;
-  for(const p of renderPlayers.values()){
-    if(p.id===socket.id || p.role!=='hider' || !p.alive) continue;
-    const d=Math.hypot(p.x-me.x,p.y-me.y);
-    if(d<180){const s=worldToScreen(p.x,p.y);ctx.save();ctx.strokeStyle='#ffcf59aa';ctx.lineWidth=5;ctx.beginPath();ctx.arc(s.x,s.y,62,0,Math.PI*2);ctx.stroke();ctx.restore();}
+function bodyPath(g, pose){
+  g.beginPath();
+  if(pose==='lay'){
+    g.moveTo(-86,-26);g.quadraticCurveTo(-62,-55,-24,-42);g.quadraticCurveTo(5,-38,38,-34);g.quadraticCurveTo(70,-30,94,-8);g.quadraticCurveTo(76,20,40,26);g.quadraticCurveTo(10,32,-28,28);g.quadraticCurveTo(-72,28,-92,10);g.closePath();
+  } else if(pose==='crouch'){
+    g.moveTo(-54,72);g.quadraticCurveTo(-78,44,-60,15);g.quadraticCurveTo(-76,-25,-44,-60);g.quadraticCurveTo(-24,-86,8,-96);g.quadraticCurveTo(44,-88,56,-58);g.quadraticCurveTo(70,-24,50,12);g.quadraticCurveTo(78,38,60,70);g.quadraticCurveTo(25,90,0,82);g.quadraticCurveTo(-25,94,-54,72);g.closePath();
+  } else {
+    g.moveTo(-48,78);g.quadraticCurveTo(-58,40,-48,8);g.quadraticCurveTo(-66,-18,-60,-62);g.quadraticCurveTo(-58,-100,-18,-112);g.quadraticCurveTo(18,-120,42,-94);g.quadraticCurveTo(64,-74,58,-42);g.quadraticCurveTo(56,-10,44,7);g.quadraticCurveTo(58,40,48,78);g.quadraticCurveTo(24,96,0,90);g.quadraticCurveTo(-24,96,-48,78);g.closePath();
   }
 }
-
-function worldBodyPointFromEvent(e){
-  const r=canvas.getBoundingClientRect();
-  const sx=(e.clientX-r.left)*canvas.width/r.width;
-  const sy=(e.clientY-r.top)*canvas.height/r.height;
-  return {sx,sy,world:screenToWorld(sx,sy)};
+function drawPlayer(p, targetCtx=ctx, offset={x:0,y:0}, scale=1, showLabel=false){
+  if(!playerVisible(p) && targetCtx===ctx) return;
+  const sp={x:(p.x-offset.x),y:(p.y-offset.y)}; targetCtx.save();targetCtx.translate(sp.x,sp.y);targetCtx.rotate(p.rotation||0);targetCtx.scale(scale,scale);
+  targetCtx.fillStyle='#0003';targetCtx.beginPath();targetCtx.ellipse(0,92,52,13,0,0,Math.PI*2);targetCtx.fill();
+  targetCtx.save();bodyPath(targetCtx,p.pose);targetCtx.clip();targetCtx.fillStyle='#f6f1e7';targetCtx.fill();for(const st of p.paint||[]){targetCtx.fillStyle=st.color;targetCtx.beginPath();targetCtx.arc(st.x,st.y,st.radius,0,Math.PI*2);targetCtx.fill();}targetCtx.restore();
+  targetCtx.strokeStyle='#151515';targetCtx.lineWidth=1;bodyPath(targetCtx,p.pose);targetCtx.stroke();
+  if(showLabel){targetCtx.fillStyle='#141414dd';targetCtx.font='bold 16px system-ui';targetCtx.textAlign='center';targetCtx.fillText(p.name,0,-135)}
+  if(p.role==='seeker' && targetCtx===hctx){ targetCtx.strokeStyle='#ef9167';targetCtx.lineWidth=3;targetCtx.beginPath();targetCtx.arc(0,0,18,0,Math.PI*2);targetCtx.stroke(); }
+  if(p.revealUntil && Date.now()<p.revealUntil && p.role==='hider'){
+    targetCtx.strokeStyle='#fff9';targetCtx.lineWidth=4;targetCtx.beginPath();targetCtx.arc(0,0,112,0,Math.PI*2);targetCtx.stroke();
+  }
+  targetCtx.restore();
+}
+function drawPlayers(){
+  const ordered=[...renderPlayers.values()].filter(p=>p.alive).sort((a,b)=>a.y-b.y);
+  for(const p of ordered) drawPlayer(p,ctx,camera,1,p.id===socket.id);
+}
+function drawEffects(){
+  const now=performance.now(); scanFX=scanFX.filter(f=>now-f.started<1300);
+  for(const f of scanFX){
+    const a=Math.min(1,(now-f.started)/180); const b=Math.max(0,1-(now-f.started)/1300); const s=worldToScreen(f.x,f.y);
+    const grad=ctx.createRadialGradient(s.x,s.y,8,s.x,s.y,95);grad.addColorStop(0,`rgba(255,255,255,${.8*b})`);grad.addColorStop(.3,`rgba(255,90,160,${.35*b})`);grad.addColorStop(.5,`rgba(50,220,255,${.25*b})`);grad.addColorStop(1,'rgba(255,255,255,0)');ctx.fillStyle=grad;ctx.beginPath();ctx.arc(s.x,s.y,100*a,0,Math.PI*2);ctx.fill();
+  }
+  if(state.phase==='seek' && me?.role==='seeker'){ctx.strokeStyle='#ffffffaa';ctx.lineWidth=2;ctx.beginPath();ctx.arc(innerWidth/2,innerHeight/2,8,0,Math.PI*2);ctx.moveTo(innerWidth/2-16,innerHeight/2);ctx.lineTo(innerWidth/2+16,innerHeight/2);ctx.moveTo(innerWidth/2,innerHeight/2-16);ctx.lineTo(innerWidth/2,innerHeight/2+16);ctx.stroke();}
 }
 
-$('paintToggle').onclick=()=>{paintMode=!paintMode;eyedropperMode=false;updateToolButtons();};
-$('eyedropperToggle').onclick=()=>{eyedropperMode=!eyedropperMode;paintMode=false;updateToolButtons();};
-$('catchMode').onclick=()=>{catchMode=!catchMode;updateToolButtons();};
-function updateToolButtons(){
-  $('paintToggle').classList.toggle('active',paintMode); $('eyedropperToggle').classList.toggle('active',eyedropperMode); $('catchMode').classList.toggle('active',catchMode);
-}
-
-canvas.addEventListener('pointerdown',e=>{
-  if(!me||!state||state.phase==='waiting') return;
-  const q=worldBodyPointFromEvent(e);
-  if(me.role==='hider' && state.phase==='hide'){
+gameCanvas.addEventListener('pointerdown',e=>{
+  if(!state||!me||state.phase==='waiting'||state.phase==='result')return;
+  const r=gameCanvas.getBoundingClientRect();const sx=(e.clientX-r.left),sy=(e.clientY-r.top);const w=screenToWorld(sx,sy);
+  if(me.role==='hider'&&state.phase==='hide'){
+    const lx=w.x-me.x,ly=w.y-me.y;
     if(eyedropperMode){
-      const sample = sampleWorldColor(q.sx,q.sy);
-      $('color').value = sample;
-      eyedropperMode=false; updateToolButtons(); setStatus(`색을 골랐어요: ${sample}`); return;
+      const pixel=ctx.getImageData(sx,sy,1,1).data;$('color').value='#'+[0,1,2].map(i=>pixel[i].toString(16).padStart(2,'0')).join('');eyedropperMode=false;updateToolButtons();setStatus('색을 찍었어요');return;
     }
-    if(paintMode){
-      // Only paint when the pointer lands on the local body.
-      const localX=q.world.x-me.x, localY=q.world.y-me.y;
-      const inside = pointInBody(localX,localY);
-      if(inside){painting=true;canvas.setPointerCapture(e.pointerId);paintAt(localX,localY);}
-    }
-  }
-  if(me.role==='seeker' && state.phase==='seek' && catchMode){
-    let best=null,bd=Infinity; for(const p of renderPlayers.values()){ if(p.role!=='hider'||!p.alive)continue; const s=worldToScreen(p.x,p.y); const d=Math.hypot(s.x-q.sx,s.y-q.sy); if(d<bd){bd=d;best=p;} }
-    if(best&&bd<70)socket.emit('caught',{targetId:best.id});
+    if(paintMode && insideBody(lx,ly,me.pose)){painting=true;gameCanvas.setPointerCapture(e.pointerId);paintAt(lx,ly);}
+  } else if(me.role==='seeker'&&state.phase==='seek'){
+    socket.emit('scan',{x:w.x,y:w.y});
   }
 });
-canvas.addEventListener('pointermove',e=>{
-  if(!painting) return; const q=worldBodyPointFromEvent(e); paintAt(q.world.x-me.x,q.world.y-me.y);
-});
-canvas.addEventListener('pointerup',()=>painting=false);
-canvas.addEventListener('pointercancel',()=>painting=false);
+gameCanvas.addEventListener('pointermove',e=>{if(!painting||!me)return;const r=gameCanvas.getBoundingClientRect();const sx=e.clientX-r.left,sy=e.clientY-r.top,w=screenToWorld(sx,sy);paintAt(w.x-me.x,w.y-me.y)});
+gameCanvas.addEventListener('pointerup',()=>painting=false);gameCanvas.addEventListener('pointercancel',()=>painting=false);
+function paintAt(x,y){if(!insideBody(x,y,me.pose))return;socket.emit('paint',{x,y,radius:Number($('brushSize').value)||18,color:$('color').value})}
+function insideBody(x,y,pose){ if(pose==='lay') return ((x+5)*(x+5))/(95*95)+(y*y)/(38*38)<1; if(pose==='crouch') return ((x)*(x))/(65*65)+((y+6)*(y+6))/(100*100)<1; return (x*x)/(62*62)+((y+10)*(y+10))/(118*118)<1; }
+$('paintToggle').onclick=()=>{paintMode=!paintMode;eyedropperMode=false;updateToolButtons()};$('eyedropperToggle').onclick=()=>{eyedropperMode=!eyedropperMode;paintMode=false;updateToolButtons()};function updateToolButtons(){$('paintToggle').classList.toggle('active',paintMode);$('eyedropperToggle').classList.toggle('active',eyedropperMode)}
+document.querySelectorAll('.poseButtons button').forEach(b=>b.onclick=()=>socket.emit('pose',{pose:b.dataset.pose}));
 
-function pointInBody(x,y){ return Math.pow(x/60,2)+Math.pow((y+10)/105,2)<1 && y>-110 && y<90; }
-function paintAt(x,y){
-  if(Math.hypot(x,y)>130) return;
-  const color=$('color').value; const radius=Number($('brushSize').value)||16;
-  socket.emit('paintStroke',{x,y,radius,color});
+window.addEventListener('keydown',e=>{const k=e.key.toLowerCase();if(['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright'].includes(k)){e.preventDefault();if(k==='w'||k==='arrowup')moveVec.y=-1;if(k==='s'||k==='arrowdown')moveVec.y=1;if(k==='a'||k==='arrowleft')moveVec.x=-1;if(k==='d'||k==='arrowright')moveVec.x=1;}});window.addEventListener('keyup',e=>{const k=e.key.toLowerCase();if(['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright'].includes(k)){if(k==='w'||k==='arrowup'||k==='s'||k==='arrowdown')moveVec.y=0;if(k==='a'||k==='arrowleft'||k==='d'||k==='arrowright')moveVec.x=0;}});
+const joy=$('joystick'),stick=joy.querySelector('.stick');let joyActive=false;function setJoy(e){const r=joy.getBoundingClientRect(),cx=r.left+r.width/2,cy=r.top+r.height/2,max=r.width/2-25,dx=e.clientX-cx,dy=e.clientY-cy,len=Math.min(max,Math.hypot(dx,dy)),a=Math.atan2(dy,dx);const x=Math.cos(a)*len,y=Math.sin(a)*len;stick.style.transform=`translate(${x}px,${y}px)`;moveVec={x:x/max,y:y/max}}joy.addEventListener('pointerdown',e=>{joyActive=true;joy.setPointerCapture(e.pointerId);setJoy(e)});joy.addEventListener('pointermove',e=>{if(joyActive)setJoy(e)});function resetJoy(){joyActive=false;moveVec={x:0,y:0};stick.style.transform='translate(0,0)'}joy.addEventListener('pointerup',resetJoy);joy.addEventListener('pointercancel',resetJoy);
+setInterval(()=>{if(!me||!state||state.phase!=='hide'||me.role!=='hider'||!me.alive)return;const len=Math.hypot(moveVec.x,moveVec.y);if(len<.05)return;const speed=4.6;me.x=Math.max(45,Math.min(state.map.width-45,me.x+moveVec.x*speed*6));me.y=Math.max(45,Math.min(state.map.height-45,me.y+moveVec.y*speed*6));if(len>.1)me.rotation=Math.atan2(moveVec.y,moveVec.x);const now=performance.now();if(now-lastMove>80){socket.emit('move',{x:me.x,y:me.y,rotation:me.rotation});lastMove=now}},40);
+setInterval(()=>render(),60);
+
+function renderHost(){
+  if(state.settings){for(const id of ['hideSeconds','seekSeconds','baseScanSeconds','finalScanSeconds','finalScanWindowSeconds','scanRadius','revealSeconds']) if(document.activeElement?.id!==id) $(id).value=state.settings[id]}
+  $('hostStartBtn').disabled=state.phase!=='waiting'||state.players.length<2;
+  renderHostRoster();renderHostCanvas();
 }
-
-function sampleWorldColor(sx,sy){
-  // Draw just the world at the current camera to a tiny sample buffer.
-  const temp=document.createElement('canvas');temp.width=1;temp.height=1;const t=temp.getContext('2d');
-  t.imageSmoothingEnabled=false;
-  const wx=camera.x-canvas.width/2+sx, wy=camera.y-canvas.height/2+sy;
-  // Fast deterministic palette sample from the current world zones/roads.
-  let color='#cbbd9e';
-  const zones=[ [150,150,1400,1050,'#8d9f79'],[1750,140,1450,1090,'#9c7d69'],[3400,180,1350,1000,'#c39e73'],[220,1300,1550,1450,'#7d8f95'],[2050,1350,1350,1400,'#91856f'],[3650,1370,1150,1420,'#867d98'] ];
-  for(const z of zones) if(wx>z[0]&&wx<z[0]+z[2]&&wy>z[1]&&wy<z[1]+z[3]) color=z[4];
-  // Sample a patch by drawing the world on the tiny canvas for better road accuracy.
-  const scale=1; t.save(); t.translate(0,0); t.fillStyle=color;t.fillRect(0,0,1,1); t.restore();
-  return rgbToHex(t.getImageData(0,0,1,1).data);
+function renderHostRoster(){
+  $('hostStatus').textContent=`현재 ${state.players.length}/${20}명 · 술래 ${state.seekerCount}명 · 숨는 사람 ${state.hiderCount}명 · 상태 ${({waiting:'대기실',hide:'숨기',seek:'찾기',result:'결과'})[state.phase]}`;
+  $('hostRoster').innerHTML=state.players.map(p=>`<div class="rosterItem"><span>${escapeHtml(p.name)}</span><span class="role-${p.role}">${p.role==='seeker'?'술래':p.role==='hider'?'숨는 사람':'대기'}</span></div>`).join('');
 }
-function rgbToHex(d){return '#'+[0,1,2].map(i=>d[i].toString(16).padStart(2,'0')).join('');}
-
-function setStatus(msg){$('status').textContent=msg;clearTimeout(setStatus.t);setStatus.t=setTimeout(()=>$('status').textContent='',1300)}
-function toastHost(msg){$('hostError').textContent=msg;setTimeout(()=>$('hostError').textContent='',1300)}
-function escapeHtml(s){return String(s).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
-
-// Keyboard fallback + on-screen joystick.
-window.addEventListener('keydown',e=>{ const k=e.key.toLowerCase(); if(['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright'].includes(k)){ e.preventDefault(); if(k==='w'||k==='arrowup')moveVec.y=-1;if(k==='s'||k==='arrowdown')moveVec.y=1;if(k==='a'||k==='arrowleft')moveVec.x=-1;if(k==='d'||k==='arrowright')moveVec.x=1;} });
-window.addEventListener('keyup',e=>{const k=e.key.toLowerCase();if(['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright'].includes(k)){ if(k==='w'||k==='arrowup'||k==='s'||k==='arrowdown')moveVec.y=0;if(k==='a'||k==='arrowleft'||k==='d'||k==='arrowright')moveVec.x=0;}});
-
-const joy=$('joystick'),stick=joy.querySelector('.stick');
-function setJoystick(e){const r=joy.getBoundingClientRect();const dx=e.clientX-(r.left+r.width/2),dy=e.clientY-(r.top+r.height/2),max=r.width/2-25,len=Math.min(max,Math.hypot(dx,dy));const ang=Math.atan2(dy,dx);const x=Math.cos(ang)*len,y=Math.sin(ang)*len;stick.style.transform=`translate(${x}px,${y}px)`;moveVec={x:x/max,y:y/max};}
-joy.addEventListener('pointerdown',e=>{joystickActive=true;joy.setPointerCapture(e.pointerId);setJoystick(e)});
-joystickActive=false;joy.addEventListener('pointermove',e=>{if(joystickActive)setJoystick(e)});joy.addEventListener('pointerup',()=>{joystickActive=false;moveVec={x:0,y:0};stick.style.transform='translate(0,0)'});joy.addEventListener('pointercancel',()=>{joystickActive=false;moveVec={x:0,y:0};stick.style.transform='translate(0,0)'});
-
-setInterval(()=>{
-  if(!me||!state||!['hide','seek'].includes(state.phase)||!me.alive)return;
-  if(state.phase==='hide' && me.role!=='hider') return;
-  const len=Math.hypot(moveVec.x,moveVec.y); if(len<0.05)return;
-  const speed=state.phase==='seek'?5.5:4.5;
-  me.x=Math.max(35,Math.min(WORLD.width-35,me.x+moveVec.x*speed*6));
-  me.y=Math.max(35,Math.min(WORLD.height-35,me.y+moveVec.y*speed*6));
-  me.rotation=Math.atan2(moveVec.y,moveVec.x);
-  camera=clampCamera(me.x,me.y);
-  const now=performance.now(); if(now-lastMove>90){socket.emit('move',{x:me.x,y:me.y,rotation:me.rotation});lastMove=now;}
-  draw();
-},40);
-
-setInterval(()=>draw(),100);
+function renderHostCanvas(){
+  const w=hostCanvas.clientWidth||1100,h=hostCanvas.clientHeight||700;const dpr=Math.min(1.5,devicePixelRatio||1);hostCanvas.width=Math.floor(w*dpr);hostCanvas.height=Math.floor(h*dpr);hctx.setTransform(dpr,0,0,dpr,0,0);
+  const sx=w/state.map.width,sy=h/state.map.height,scale=Math.min(sx,sy),ox=(w-state.map.width*scale)/2,oy=(h-state.map.height*scale)/2;
+  hctx.save();hctx.translate(ox,oy);hctx.scale(scale,scale);drawWorld(hctx,state.map.width,state.map.height,scale);for(const p of state.players.filter(p=>p.alive))drawPlayer(p,hctx,{x:0,y:0},1,true);hctx.restore();
+}

@@ -3,76 +3,68 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-<title>명화 카멜레온 V2</title>
+<title>명화 카멜레온 V3</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <section id="lobby" class="screen">
   <div class="panel">
-    <div class="eyebrow">2D HIDE & SEEK · V2</div>
+    <div class="eyebrow">2D HIDE & SEEK · V3</div>
     <h1>명화 카멜레온</h1>
-    <p>주변 색을 찍어 내 몸에 칠하고, 큰 맵 속에 숨어보세요.</p>
+    <p>몸 전체를 칠해 그림 속에 숨고, 탐지 펄스로 찾아내세요.</p>
     <input id="name" maxlength="16" placeholder="이름" value="학생">
-    <input id="room" maxlength="12" placeholder="선생님이 알려준 방 코드">
+    <input id="room" maxlength="12" placeholder="학생용 방 코드">
     <button id="joinBtn">학생으로 입장</button>
-    <div class="divider"><span>교사용</span></div>
+    <div class="divider"><span>관리자</span></div>
     <input id="adminCode" maxlength="12" placeholder="관리자 코드">
     <button id="hostBtn" class="ghost">관리자 방 만들기</button>
-    <div id="joinError"></div>
+    <div id="joinError" class="error"></div>
   </div>
 </section>
 
 <section id="host" class="screen hidden">
-  <div class="panel wide hostPanel">
-    <div class="eyebrow">HOST / 선생님</div>
-    <h2>수업 방 관리</h2>
-    <div class="roomCard"><div>학생용 방 코드</div><strong id="hostRoomCode">------</strong><button id="copyCodeBtn" class="ghost">코드 복사</button></div>
-    <div id="hostRoster"></div>
-    <button id="hostStartBtn" disabled>게임 시작</button>
-    <button id="hostRestartBtn" class="ghost">대기실로 초기화</button>
-    <p class="hint">관리자는 게임에 참여하지 않고 방 시작만 담당합니다. 최대 20명.</p>
-    <div id="hostError"></div>
-  </div>
-</section>
-
-<section id="waiting" class="screen hidden">
   <div class="panel wide">
-    <div class="eyebrow">WAITING ROOM</div>
-    <h2>방 <span id="roomCodeText"></span></h2>
-    <div id="roster"></div>
-    <p class="hint">선생님이 게임을 시작하면 역할이 즉시 정해집니다.</p>
+    <div class="eyebrow">HOST / 선생님</div>
+    <div class="hostTop">
+      <div>
+        <h2>수업 방 관리</h2>
+        <div class="roomCard"><span>학생 방 코드</span><strong id="hostRoomCode">------</strong><button id="copyCodeBtn" class="ghost small">복사</button></div>
+      </div>
+      <div class="hostActions"><button id="hostStartBtn" disabled>게임 시작</button><button id="hostRestartBtn" class="ghost">대기실 초기화</button></div>
+    </div>
+    <div class="settingsGrid">
+      <label>숨을 시간(초)<input id="hideSeconds" type="number" min="10" max="600" value="90"></label>
+      <label>찾는 시간(초)<input id="seekSeconds" type="number" min="30" max="900" value="180"></label>
+      <label>기본 탐지 간격(초)<input id="baseScanSeconds" type="number" min="0.5" max="30" step="0.5" value="5"></label>
+      <label>마지막 구간 탐지 간격(초)<input id="finalScanSeconds" type="number" min="0.5" max="10" step="0.5" value="1"></label>
+      <label>마지막 구간(초)<input id="finalScanWindowSeconds" type="number" min="5" max="120" value="30"></label>
+      <label>탐지 범위<input id="scanRadius" type="number" min="50" max="400" value="135"></label>
+      <label>드러남 시간(초)<input id="revealSeconds" type="number" min="0.5" max="5" step="0.1" value="1.8"></label>
+      <button id="saveSettings" class="ghost">설정 저장</button>
+    </div>
+    <div class="hostLayout">
+      <div>
+        <h3>전체 맵 — 관리자는 시작 후 항상 전체를 봄</h3>
+        <canvas id="hostCanvas" width="1100" height="700"></canvas>
+      </div>
+      <div class="rosterPanel"><h3>참가자 / 역할</h3><div id="hostRoster"></div><div id="hostStatus"></div></div>
+    </div>
   </div>
 </section>
 
-<section id="game" class="hidden">
-  <header>
-    <div><b>명화 카멜레온</b><span id="phaseText">준비</span><span id="roleBadge"></span></div>
-    <div>라운드 <span id="round">0</span> · <strong id="time">--</strong></div>
-  </header>
-  <main>
-    <div class="stageWrap">
-      <canvas id="canvas" width="1100" height="680"></canvas>
-      <div id="miniHint" class="floatingHint">큰 맵 · 드래그 패드로 이동</div>
-      <div id="joystick" class="joystick"><div class="stick"></div></div>
-      <div id="actions">
-        <button id="paintToggle" class="action hiderOnly hidden">🖌 그리기</button>
-        <button id="eyedropperToggle" class="action hiderOnly hidden">💧 스포이드</button>
-        <button id="catchMode" class="action seekerOnly hidden">🔎 찾기</button>
-      </div>
-    </div>
-    <aside>
-      <h3 id="roleTitle">역할</h3>
-      <p id="roleDesc">게임이 시작되면 역할이 표시됩니다.</p>
-      <div id="paintPanel" class="toolPanel hidden">
-        <h3>내 몸 칠하기</h3>
-        <div class="row"><label>색상 <input id="color" type="color" value="#c5b08a"></label><label>붓 크기 <input id="brushSize" type="range" min="5" max="34" value="16"></label></div>
-        <p class="hint">그리기를 누르고 내 사람 몸 위에 문지르세요. 스포이드는 맵의 색을 그대로 가져옵니다.</p>
-      </div>
-      <div id="seekPanel" class="toolPanel hidden"><h3>술래</h3><p class="hint">패드로 이동한 뒤 가까운 숨는 사람을 눌러 잡아보세요.</p></div>
-      <div id="status"></div>
-    </aside>
-  </main>
-  <footer><span>V2 · 대형 2D 맵</span><span>학교 저사양 태블릿 최적화 시안</span></footer>
+<section id="game" class="screen hidden">
+  <div id="hud">
+    <span id="phaseLabel">대기</span><span id="timer">00:00</span><span id="roleLabel"></span><span id="status"></span>
+  </div>
+  <canvas id="gameCanvas"></canvas>
+  <div id="paintTools" class="toolbar hidden">
+    <button id="paintToggle">🖌 그리기</button><button id="eyedropperToggle">💧 스포이드</button>
+    <input id="color" type="color" value="#7b8f70"><label>크기 <input id="brushSize" type="range" min="6" max="40" value="18"></label>
+    <div class="poseButtons"><span>자세</span><button data-pose="stand">서기</button><button data-pose="crouch">웅크리기</button><button data-pose="lay">눕기</button></div>
+  </div>
+  <div id="seekTools" class="toolbar hidden"><span>찾기: 화면을 눌러 탐지 펄스를 보내세요</span><span id="scanText"></span></div>
+  <div id="joystick" aria-label="이동 패드"><div class="stick"></div></div>
+  <div id="resultBox" class="result hidden"></div>
 </section>
 <script src="/socket.io/socket.io.js"></script>
 <script src="game.js"></script>
